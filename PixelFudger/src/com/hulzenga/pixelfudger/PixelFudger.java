@@ -1,22 +1,27 @@
 package com.hulzenga.pixelfudger;
 
-import java.io.FileNotFoundException;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.List;
 
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.Bitmap.CompressFormat;
 import android.graphics.Bitmap.Config;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.SystemClock;
-import android.provider.MediaStore;
 import android.util.Log;
 import android.view.View;
 import android.view.View.OnClickListener;
@@ -26,6 +31,7 @@ import android.widget.AdapterView.OnItemSelectedListener;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.ImageView;
+import android.widget.ProgressBar;
 import android.widget.Spinner;
 import android.widget.Toast;
 
@@ -33,6 +39,7 @@ public class PixelFudger extends Activity {
 
     private static final String TAG             = "PixelFudger";
     private static final int    PICTURE_REQUEST = 1;
+    private static final String IMAGE_URI_KEY   = "uri";
 
     private static final int    STRIP_TIME      = 2000;
     private static final int    FRAME_TIME      = 32;
@@ -40,10 +47,14 @@ public class PixelFudger extends Activity {
 
     private List<View>          mControlls      = new ArrayList<View>();
     private ImageView           mImageView;
+    private ProgressBar         mProgressBar;
     private Spinner             mStrategySpinner;
     private Button              mRedButton;
     private Button              mGreenButton;
     private Button              mBlueButton;
+
+    private Bitmap              mBitmap;
+    private Uri                 mBitmapUri;
 
     private enum COLOR_COMPONENT {
         RED(16), GREEN(8), BLUE(0);
@@ -77,20 +88,20 @@ public class PixelFudger extends Activity {
             @Override
             public int operate(int pixel, int shift) {
 
-                int s = (pixel >> shift) & 255;                
-                
+                int s = (pixel >> shift) & 255;
+
                 int a = (pixel >> 24) & 255;
                 int r = (pixel >> 16) & 255;
                 int g = (pixel >> 8) & 255;
                 int b = (pixel) & 255;
-                
-                int sum = r+g+b;
+
+                int sum = r + g + b;
                 if (sum == s) {
                     a = 0;
                 } else {
                     a = a - (a * s) / (sum);
                 }
-                
+
                 return Color.argb(a, r, g, b) & (~(255 << shift));
             }
 
@@ -104,7 +115,13 @@ public class PixelFudger extends Activity {
                 } else {
                     return pixel | (255 << shift);
                 }
-                
+
+            }
+        },
+        INVERT("Invert Channel") {
+            @Override
+            public int operate(int pixel, int shift) {
+                return pixel ^ (255 << shift);
             }
         };
 
@@ -128,6 +145,7 @@ public class PixelFudger extends Activity {
         setContentView(R.layout.activity_pixel_fudger);
 
         mImageView = (ImageView) findViewById(R.id.imageView);
+        mProgressBar = (ProgressBar) findViewById(R.id.progressBar);
         mStrategySpinner = (Spinner) findViewById(R.id.strategySpinner);
         mRedButton = (Button) findViewById(R.id.redButton);
         mGreenButton = (Button) findViewById(R.id.greenButton);
@@ -148,10 +166,25 @@ public class PixelFudger extends Activity {
 
             @Override
             public boolean onLongClick(View v) {
-                String imageUrl = MediaStore.Images.Media.insertImage(getContentResolver(), getBitmapFromImageView(), "", "");
-                if (imageUrl != null) {
-                    Toast.makeText(getApplicationContext(), "Succesfully saved image", Toast.LENGTH_SHORT).show();
-                } else {
+
+                File path = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES);
+                String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+                String filename = "PixelFudger_" + timestamp + ".jpg";
+                File file = new File(path, filename);
+                FileOutputStream stream;
+                try {
+                    stream = new FileOutputStream(file);
+                    mBitmap.compress(CompressFormat.JPEG, 100, stream);
+                    stream.close();
+                    
+                    Uri uri = Uri.fromFile(file);                    
+                    Intent intent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
+                    intent.setData(uri);
+                    sendBroadcast(intent);
+                    
+                    Toast.makeText(getApplicationContext(), "Saved Image", Toast.LENGTH_SHORT).show();
+                } catch (Exception e) {
+                    Log.e(TAG, "saveAndShare (compressing):", e);
                     Toast.makeText(getApplicationContext(), "Failed to save image", Toast.LENGTH_SHORT).show();
                 }
                 return true;
@@ -173,6 +206,26 @@ public class PixelFudger extends Activity {
             public void onNothingSelected(AdapterView<?> parent) {
             }
         });
+
+        boolean loadFromSavedState = false;
+        if (savedInstanceState != null) {
+            Uri imageUri = (Uri) savedInstanceState.getParcelable(IMAGE_URI_KEY);
+            if (imageUri != null) {
+                new LoadBitmap().execute(imageUri);
+                loadFromSavedState = true;
+            }
+        }
+        
+        if (!loadFromSavedState) {
+            mBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.angrave).copy(Config.ARGB_8888, true);
+            mImageView.setImageBitmap(mBitmap);
+        }        
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putParcelable(IMAGE_URI_KEY, mBitmapUri);
     }
 
     private void lockControlls() {
@@ -193,50 +246,93 @@ public class PixelFudger extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == PICTURE_REQUEST) {
             if (resultCode == RESULT_OK) {
-                try {
-                    Uri imageUri = data.getData();
+                new LoadBitmap().execute(data.getData());
+            }
+        }
+    }
+    
+    private class LoadBitmap extends AsyncTask<Uri, Integer, Boolean> {
 
-                    InputStream stream = getContentResolver().openInputStream(imageUri);
-                    Bitmap bitmap = BitmapFactory.decodeStream(stream);
-                    mImageView.setImageBitmap(bitmap);
-                } catch (FileNotFoundException e) {
-                    Log.e(TAG, "Could not find the picked file: " + e.getMessage());
+        @Override
+        protected void onPreExecute() {
+            mImageView.setVisibility(View.INVISIBLE);
+            mProgressBar.setVisibility(View.VISIBLE);
+        }
+
+        @Override
+        protected Boolean doInBackground(Uri... uris) {
+            try {
+                InputStream stream = getContentResolver().openInputStream(uris[0]);
+
+                BitmapFactory.Options options = new BitmapFactory.Options();
+                options.inJustDecodeBounds = true;
+                BitmapFactory.decodeStream(stream, null, options);
+                stream.close();
+
+                int w = options.outWidth;
+                int h = options.outHeight;
+                int displayW = getResources().getDisplayMetrics().widthPixels;
+                int displayH = getResources().getDisplayMetrics().heightPixels;
+
+                int sample = 1;
+                while (w > displayW * sample || h > displayH * sample) {
+                    sample = sample * 2;
                 }
+
+                options.inJustDecodeBounds = false;
+                options.inSampleSize = sample;
+
+                stream = getContentResolver().openInputStream(uris[0]);
+                Bitmap bitmap = BitmapFactory.decodeStream(stream, null, options);
+                stream.close();
+
+                if (mBitmap != null) {
+                    mBitmap.recycle();
+                }
+                mBitmap = Bitmap.createBitmap(bitmap.getWidth(), bitmap.getHeight(), Bitmap.Config.ARGB_8888);
+                
+                Canvas c = new Canvas(mBitmap);
+                c.drawBitmap(bitmap, 0, 0, null);
+                bitmap.recycle();
+                mBitmapUri = uris[0];
+                return true;
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to loadBitmap: " + e.getMessage());
+                return false;
+            }
+        }
+
+        @Override
+        protected void onPostExecute(Boolean result) {
+            mImageView.setVisibility(View.VISIBLE);
+            mProgressBar.setVisibility(View.INVISIBLE);
+            if (result) {
+                mImageView.setImageBitmap(mBitmap);
             }
         }
     }
 
-    public void stripRed(View view) {
-        strip(COLOR_COMPONENT.RED);
+    public void onClickRed(View view) {
+        fudge(COLOR_COMPONENT.RED);
     }
 
-    public void stripGreen(View view) {
-        strip(COLOR_COMPONENT.GREEN);
+    public void onClickGreen(View view) {
+        fudge(COLOR_COMPONENT.GREEN);
     }
 
-    public void stripBlue(View view) {
-        strip(COLOR_COMPONENT.BLUE);
+    public void onClickBlue(View view) {
+        fudge(COLOR_COMPONENT.BLUE);
     }
 
-    private Bitmap getBitmapFromImageView() {
-
-        Bitmap bitmap = Bitmap.createBitmap(mImageView.getWidth(), mImageView.getHeight(), Config.ARGB_8888);
-        Canvas canvas = new Canvas(bitmap);
-        mImageView.draw(canvas);
-
-        return bitmap;
-    }
-
-    private void strip(final COLOR_COMPONENT component) {
+    private void fudge(final COLOR_COMPONENT component) {
         lockControlls();
 
-        final Bitmap bitmap = getBitmapFromImageView();
-        final int width = bitmap.getWidth();
-        final int height = bitmap.getHeight();
+        final int width = mBitmap.getWidth();
+        final int height = mBitmap.getHeight();
         // rows per frame
         final int rpf = (int) Math.ceil(height / (double) FRAMES);
         final int[] pixels = new int[width * height];
-        bitmap.getPixels(pixels, 0, bitmap.getWidth(), 0, 0, width, height);
+        mBitmap.getPixels(pixels, 0, mBitmap.getWidth(), 0, 0, width, height);
 
         new Thread(new Runnable() {
 
@@ -248,7 +344,7 @@ public class PixelFudger extends Activity {
                     int lastRow = 0;
                     long lastFrameTime = SystemClock.elapsedRealtime(), elapsed;
                     for (int row = 0; row < height; row++) {
-                        
+
                         for (int i = row * width; i < (row + 1) * width; i++) {
                             pixels[i] = mStrategy.operate(pixels[i], shift);
                         }
@@ -257,16 +353,16 @@ public class PixelFudger extends Activity {
                             elapsed = SystemClock.elapsedRealtime() - lastFrameTime;
                             if (elapsed < FRAME_TIME) {
                                 SystemClock.sleep(FRAME_TIME - elapsed);
-                            }                            
-                            bitmap.setPixels(pixels, lastRow * width, width, 0, lastRow, width, (row + 1) - lastRow);
+                            }
+                            mBitmap.setPixels(pixels, lastRow * width, width, 0, lastRow, width, (row + 1) - lastRow);
                             lastRow = (row + 1);
-                            
+
                             lastFrameTime = SystemClock.elapsedRealtime();
-                            
+
                             runOnUiThread(new Runnable() {
                                 @Override
                                 public void run() {
-                                    mImageView.setImageBitmap(bitmap);
+                                    mImageView.setImageBitmap(mBitmap);
                                 }
                             });
                         }
@@ -281,6 +377,5 @@ public class PixelFudger extends Activity {
                 }
             }
         }).start();
-
     }
 }
