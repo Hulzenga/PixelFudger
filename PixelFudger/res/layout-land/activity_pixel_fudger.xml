@@ -6,15 +6,22 @@
     android:paddingLeft="@dimen/activity_horizontal_margin"
     android:paddingRight="@dimen/activity_horizontal_margin"
     android:paddingTop="@dimen/activity_vertical_margin"
-    tools:context=".ColorStripperActivity" >
+    tools:context=".PixelFudger" >
 
     <LinearLayout
         android:id="@+id/controlContainer"
         android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
+        android:layout_height="match_parent"
         android:layout_alignParentBottom="true"
-        android:layout_alignParentLeft="true"
-        android:layout_alignParentRight="true" >
+        android:layout_alignParentRight="true"
+        android:layout_alignParentTop="true"
+        android:orientation="vertical" >
+
+        <Spinner
+            android:id="@+id/strategySpinner"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_weight="1" />
 
         <Button
             android:id="@+id/redButton"
@@ -22,7 +29,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:onClick="stripRed"
-            android:text="Red" />
+            android:text="@string/red" />
 
         <Button
             android:id="@+id/greenButton"
@@ -30,7 +37,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:onClick="stripGreen"
-            android:text="Green" />
+            android:text="@string/green" />
 
         <Button
             android:id="@+id/blueButton"
@@ -38,18 +45,18 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:onClick="stripBlue"
-            android:text="Blue" />
-
+            android:text="@string/blue" />
     </LinearLayout>
 
     <ImageView
         android:id="@+id/imageView"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_above="@id/controlContainer"
         android:layout_alignParentLeft="true"
-        android:layout_alignParentRight="true"
         android:layout_alignParentTop="true"
-        android:src="@android:drawable/sym_def_app_icon" />
+        android:layout_toLeftOf="@+id/controlContainer"
+        android:contentDescription="@string/image_content_description"
+        android:scaleType="fitCenter"
+        android:src="@drawable/angrave" />
 
 </RelativeLayout>
